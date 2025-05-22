@@ -1,0 +1,18 @@
+# .gitignore
+
+# 忽略所有原始影像資料
+/data/train_images/*
+/data/train_concatenated_pngs/*
+
+# 忽略中間處理或模型
+*.tiff
+*.png
+*.pt
+*.pth
+
+# Jupyter Notebook Checkpoint
+.ipynb_checkpoints/
+
+# VSCode / pycache
+.vscode/
+__pycache__/
