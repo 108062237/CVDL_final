@@ -16,3 +16,5 @@
 # VSCode / pycache
 .vscode/
 __pycache__/
+/home/313551113/.ssh/id_ed25519_github
+

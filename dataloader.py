@@ -23,9 +23,12 @@ class CFG:
     seed = 42
     debug = False  
 
+    model_name = "efficientnet_b1"
+
     # Data path (raw data)
     data_dir = "/home/gpl_homee/CVDL_Final/data" 
-    preprocessed_image_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs"
+    preprocessed_image_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs_64*128"
+    cleaned_train_csv_name = "clean_noise.csv"
 
     # Image processing parameters
     # tile_size = 256
@@ -166,6 +169,9 @@ def get_transforms(mode="train", mean=CFG.mean, std=CFG.std):
         return transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomVerticalFlip(p=0.5),
+            transforms.RandomRotation(degrees=10),
+            transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
             transforms.ToTensor(), 
             transforms.Normalize(mean=mean, std=std)
         ])
@@ -184,41 +190,45 @@ def get_dataloaders_for_fold(fold_to_run, cfg):
     """
     set_seed(cfg.seed) 
 
-    df_path = os.path.join(cfg.data_dir, "train.csv")
+    df_path = os.path.join(cfg.data_dir, cfg.cleaned_train_csv_name)
     if not os.path.exists(df_path):
         raise FileNotFoundError(f"train.csv not found in {cfg.data_dir}.")
 
     df = pd.read_csv(df_path)
-    df = df.drop_duplicates(subset="image_id").reset_index(drop=True)
 
-    # Build Stratified K-Fold split
-    df["fold"] = -1
-    skf = StratifiedKFold(n_splits=cfg.n_fold, shuffle=True, random_state=cfg.fold_seed)
-    for i, (_, val_idx) in enumerate(skf.split(df, df[cfg.target_col])):
-        df.loc[val_idx, "fold"] = i
-    
-    print(f"Fold {fold_to_run} data distribution:")
-    print(df[df['fold'] == fold_to_run][cfg.target_col].value_counts().sort_index())
-    print(f"Fold {fold_to_run} training data distribution:")
-    print(df[df['fold'] != fold_to_run][cfg.target_col].value_counts().sort_index())
+    fold_to_run_for_csv_selection = fold_to_run + 1
 
-    train_df = df[df['fold'] != fold_to_run].reset_index(drop=True)
-    valid_df = df[df['fold'] == fold_to_run].reset_index(drop=True)
+    print(f"Fold {fold_to_run}: Use 'kfold' == {fold_to_run_for_csv_selection} in CSV as validation set.")
+
+    train_df = df[df['kfold'] != fold_to_run_for_csv_selection].reset_index(drop=True)
+    valid_df = df[df['kfold'] == fold_to_run_for_csv_selection].reset_index(drop=True)
+
+
+    train_df = train_df.dropna(subset=['image_id'])
+    valid_df = valid_df.dropna(subset=['image_id'])
+
+    train_df = train_df.dropna(subset=[cfg.target_col])
+    valid_df = valid_df.dropna(subset=[cfg.target_col])
+
+    train_df[cfg.target_col] = train_df[cfg.target_col].astype(int)
+    valid_df[cfg.target_col] = valid_df[cfg.target_col].astype(int)
 
     if cfg.debug:
         print("DEBUG mode: using small sample.")
         train_df = train_df.sample(n=cfg.batch_size * 2, random_state=cfg.seed).reset_index(drop=True)
         valid_df = valid_df.sample(n=cfg.batch_size * 2, random_state=cfg.seed).reset_index(drop=True)
 
+    image_dir_to_use = getattr(cfg, 'preprocessed_image_dir', './train_concatenated_pngs_64*128')
+
     train_dataset = PandaDataset(
         df=train_df,
-        image_dir=cfg.preprocessed_image_dir,
+        image_dir=image_dir_to_use,
         target_col=cfg.target_col,
         transform=get_transforms(mode="train", mean=cfg.mean, std=cfg.std) #, final_image_size=final_img_size_for_transform)
     )
     valid_dataset = PandaDataset(
         df=valid_df,
-        image_dir=cfg.preprocessed_image_dir,
+        image_dir=image_dir_to_use,
         target_col=cfg.target_col,
         transform=get_transforms(mode="valid", mean=cfg.mean, std=cfg.std) #, final_image_size=final_img_size_for_transform)
     )
@@ -239,8 +249,12 @@ def get_dataloaders_for_fold(fold_to_run, cfg):
         pin_memory=torch.cuda.is_available(),
         drop_last=False
     )
+    print(f"Fold {fold_to_run}: Load preprocessed PNG images from '{image_dir_to_use}'.")
+    if len(train_dataset) > 0 and len(valid_dataset) > 0:
+        print(f"{len(train_dataset)} training samples, {len(valid_dataset)} validation samples")
+    else:
+        print(f"Warning: The training set or validation set is empty. Training samples: {len(train_dataset)}, validation samples: {len(valid_dataset)}")
 
-    print(f"Fold {fold_to_run}: {len(train_dataset)} training samples, {len(valid_dataset)} validation samples")
     return train_loader, valid_loader
 
 if __name__ == '__main__':

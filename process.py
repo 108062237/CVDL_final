@@ -11,12 +11,13 @@ import gc
 # --- Configuration ---
 class PreprocessConfig:
     data_dir = "/home/gpl_homee/CVDL_Final/data"
-    output_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs"  # Directory to save concatenated images
+    input_png_dir = "/home/gpl_homee/CVDL_Final/data/train_png"
+    output_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs_64*256"  # Directory to save concatenated images
 
     wsi_level_to_read = 1
 
     # Tile configuration
-    tile_size = 128
+    tile_size = 256
     grid_side_count = 8  # If we want final image to be grid_side x grid_side tiles
     num_tiles_total = grid_side_count ** 2  # Total number of tiles to extract
 
@@ -45,6 +46,7 @@ def get_tiles_from_region(region_np, tile_size, num_tiles_to_extract, fg_thresho
                 candidate_tiles.append(tile)
             elif not candidate_tiles and (i*tiles_in_row + j) >= (tiles_in_col*tiles_in_row - num_tiles_to_extract):
                 candidate_tiles.append(tile)
+    
 
     if not candidate_tiles:
         all_possible_tiles = []
