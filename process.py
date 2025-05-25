@@ -12,13 +12,13 @@ import gc
 class PreprocessConfig:
     data_dir = "/home/gpl_homee/CVDL_Final/data"
     input_png_dir = "/home/gpl_homee/CVDL_Final/data/train_png"
-    output_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs_64*256"  # Directory to save concatenated images
+    output_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs_36*256"  # Directory to save concatenated images
 
     wsi_level_to_read = 1
 
     # Tile configuration
     tile_size = 256
-    grid_side_count = 8  # If we want final image to be grid_side x grid_side tiles
+    grid_side_count = 6  # If we want final image to be grid_side x grid_side tiles
     num_tiles_total = grid_side_count ** 2  # Total number of tiles to extract
 
     foreground_threshold = 230
@@ -165,8 +165,8 @@ if __name__ == "__main__":
     config = PreprocessConfig()
     
     # Example: if you want to get 8x8=64 tiles of size 128x128
-    config.grid_side_count = 8
-    config.tile_size = 128
+    config.grid_side_count = 6
+    config.tile_size = 256
     config.num_tiles_total = config.grid_side_count ** 2
     config.wsi_level_to_read = 1
 

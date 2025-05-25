@@ -27,7 +27,7 @@ class CFG:
 
     # Data path (raw data)
     data_dir = "/home/gpl_homee/CVDL_Final/data" 
-    preprocessed_image_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs_64*128"
+    preprocessed_image_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_pngs_36*256"
     cleaned_train_csv_name = "clean_noise.csv"
 
     # Image processing parameters
@@ -58,75 +58,6 @@ def set_seed(seed=CFG.seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-# # --- Image processing helper functions ---
-# def get_tiles(img, tile_size=CFG.tile_size, n_tiles=CFG.n_tiles):
-#     """
-#     Extract foreground tiles from input image and return a tile list
-#     """
-#     h, w, c = img.shape
-#     pad_h = (tile_size - h % tile_size) % tile_size
-#     pad_w = (tile_size - w % tile_size) % tile_size
-#     img_padded = np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), constant_values=255)
-
-#     img_reshaped = img_padded.reshape(
-#         img_padded.shape[0] // tile_size, tile_size,
-#         img_padded.shape[1] // tile_size, tile_size, c
-#     )
-#     img_transposed = img_reshaped.transpose(0, 2, 1, 3, 4).reshape(-1, tile_size, tile_size, c)
-
-#     # Sort tiles by average brightness (remove background)
-#     if c == 3:
-#         tile_means = img_transposed.mean(axis=(1, 2, 3)) 
-#     else: 
-#         tile_means = img_transposed.mean(axis=(1, 2))
-
-#     idxs = np.argsort(tile_means) 
-    
-#     # Handle case where n_tiles > available tiles
-#     num_available_tiles = len(idxs)
-#     selected_idxs = idxs[:min(n_tiles, num_available_tiles)]
-#     tiles = img_transposed[selected_idxs]
-
-#     # Pad with white tiles if not enough tiles
-#     if len(tiles) < n_tiles:
-#         num_to_pad = n_tiles - len(tiles)
-#         if c == 3:
-#             white_tile = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
-#         else:
-#             white_tile = np.full((tile_size, tile_size), 255, dtype=np.uint8)
-#         padding_tiles = np.array([white_tile] * num_to_pad)
-#         if len(tiles) == 0: 
-#              tiles = padding_tiles
-#         else:
-#              tiles = np.concatenate([tiles, padding_tiles], axis=0)
-    
-#     return tiles
-
-# def tile_concat(tiles, tile_size=CFG.tile_size, n_tiles=CFG.n_tiles):
-#     """
-#     Concatenate tiles into a (sqrt(n_tiles) x sqrt(n_tiles)) image
-#     """
-#     grid_size = int(n_tiles ** 0.5)
-#     if grid_size * grid_size != n_tiles:
-#         raise ValueError(f"n_tiles ({n_tiles}) must be a perfect square for tile_concat.")
-    
-#     channels = tiles.shape[-1]
-#     result = np.zeros((tile_size * grid_size, tile_size * grid_size, channels), dtype=np.uint8)
-    
-#     for i in range(grid_size):
-#         for j in range(grid_size):
-#             idx = i * grid_size + j
-#             if idx < len(tiles):
-#                 result[i * tile_size:(i + 1) * tile_size,
-#                        j * tile_size:(j + 1) * tile_size, :] = tiles[idx]
-#             else: 
-#                 if channels == 3:
-#                     result[i * tile_size:(i + 1) * tile_size,
-#                            j * tile_size:(j + 1) * tile_size, :] = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
-#                 else:
-#                     result[i * tile_size:(i + 1) * tile_size,
-#                            j * tile_size:(j + 1) * tile_size, :] = np.full((tile_size, tile_size), 255, dtype=np.uint8)
-#     return result
 
 # --- Dataset class ---
 class PandaDataset(Dataset):
@@ -164,7 +95,8 @@ class PandaDataset(Dataset):
         return image, torch.tensor(label, dtype=torch.long)
 
 # --- Data augmentation Transforms ---
-def get_transforms(mode="train", mean=CFG.mean, std=CFG.std):
+def get_transforms(mode="train", mean=CFG.mean, std=CFG.std, target_size=(600, 600)):
+    
     if mode == "train":
         return transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
@@ -218,7 +150,7 @@ def get_dataloaders_for_fold(fold_to_run, cfg):
         train_df = train_df.sample(n=cfg.batch_size * 2, random_state=cfg.seed).reset_index(drop=True)
         valid_df = valid_df.sample(n=cfg.batch_size * 2, random_state=cfg.seed).reset_index(drop=True)
 
-    image_dir_to_use = getattr(cfg, 'preprocessed_image_dir', './train_concatenated_pngs_64*128')
+    image_dir_to_use = getattr(cfg, 'preprocessed_image_dir', './train_concatenated_64*256')
 
     train_dataset = PandaDataset(
         df=train_df,

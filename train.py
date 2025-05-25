@@ -217,8 +217,8 @@ def run_training(config, current_fold):
         if cosine_t_max <= 0: # Should not happen if warmup_epochs < num_epochs_total
              print(f"Error: cosine_t_max ({cosine_t_max}) is not positive. Check epoch configurations.")
              cosine_t_max = 1 # Fallback to avoid error, but indicates config issue
-        scheduler_cosine = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max, eta_min=getattr(config, 'eta_min', 1e-6))
-        print(f"Learning Rate Scheduler: Warmup ({warmup_epochs} epochs) + CosineAnnealingLR (T_max={cosine_t_max}, eta_min={getattr(config, 'eta_min', 1e-6):.1e})")
+        scheduler_cosine = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max, eta_min=getattr(config, 'eta_min', 1e-5))
+        print(f"Learning Rate Scheduler: Warmup ({warmup_epochs} epochs) + CosineAnnealingLR (T_max={cosine_t_max}, eta_min={getattr(config, 'eta_min', 1e-5):.1e})")
 
     best_kappa = -1.0
     output_dir = f"./PANDA_models_fold{current_fold}"
