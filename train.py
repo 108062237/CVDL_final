@@ -16,9 +16,17 @@ from dataloader import CFG, get_dataloaders_for_fold, set_seed
 
 # --- Model definition ---
 class PandaSimpleModel(nn.Module):
-    def __init__(self, model_name='resnet34', pretrained=True, num_classes=CFG.num_classes):
+    def __init__(self, model_name='resnet34', pretrained=True, num_classes_out=None):
         super().__init__()
-        current_num_classes = num_classes 
+        if num_classes_out is None:
+            try:
+                default_out_dim = CFG.model_output_dim
+            except NameError: # 如果 CFG 未在全局定義
+                print("Warning: CFG not globally defined for model_output_dim, defaulting to 5. Pass explicitly if needed.")
+                default_out_dim = 5
+            current_num_classes = default_out_dim
+        else:
+            current_num_classes = num_classes_out 
 
         if model_name == 'resnet34':
             self.model = models.resnet34(pretrained=pretrained)
@@ -127,15 +135,17 @@ class PandaSimpleModel(nn.Module):
 def train_fn(train_loader, model, criterion, optimizer, device):
     model.train()
     running_loss = 0.0
-    progress_bar = tqdm(train_loader, desc="Training", leave=True, position=0)
-    for images, labels in progress_bar:
+    progress_bar = tqdm(train_loader, desc="Training", leave=False) # leave=False for cleaner output with multiple bars
+    for images, labels_binned in progress_bar:
         images = images.to(device, dtype=torch.float)
-        labels = labels.to(device, dtype=torch.long)
+        labels_binned = labels_binned.to(device, dtype=torch.float) 
+
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        outputs = model(images) 
+        loss = criterion(outputs, labels_binned) 
         loss.backward()
         optimizer.step()
+
         running_loss += loss.item() * images.size(0)
         progress_bar.set_postfix(loss=f"{loss.item():.4f}")
 
@@ -145,22 +155,30 @@ def train_fn(train_loader, model, criterion, optimizer, device):
 def valid_fn(valid_loader, model, criterion, device):
     model.eval()
     running_loss = 0.0
-    all_preds = []
-    all_labels = []
-    progress_bar = tqdm(valid_loader, desc="Validation", leave=True, position=0)
+    all_preds_scalar = []  
+    all_labels_scalar = [] 
+
+    progress_bar = tqdm(valid_loader, desc="Validation", leave=False)
     with torch.no_grad():
-        for images, labels in progress_bar:
+        for images, labels_binned in progress_bar: 
             images = images.to(device, dtype=torch.float)
-            labels = labels.to(device, dtype=torch.long)
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            labels_binned = labels_binned.to(device, dtype=torch.float) 
+
+            outputs = model(images) 
+            loss = criterion(outputs, labels_binned)
             running_loss += loss.item() * images.size(0)
-            preds = torch.argmax(outputs, dim=1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+
+            preds_scalar = outputs.sigmoid().sum(dim=1).round().detach().cpu().numpy()
+
+            labels_scalar = labels_binned.sum(dim=1).detach().cpu().numpy()
+
+            all_preds_scalar.extend(preds_scalar.astype(int)) 
+            all_labels_scalar.extend(labels_scalar.astype(int)) 
+
             progress_bar.set_postfix(loss=f"{loss.item():.4f}")
+
     epoch_loss = running_loss / len(valid_loader.dataset)
-    kappa = cohen_kappa_score(all_labels, all_preds, weights='quadratic')
+    kappa = cohen_kappa_score(all_labels_scalar, all_preds_scalar, weights='quadratic')
     return epoch_loss, kappa
 
 # --- Main execution function ---
@@ -177,27 +195,14 @@ def run_training(config, current_fold):
 
     print("Initializing model...")
     # Ensure config has model_name attribute or provide a default
-    model_name_to_use = getattr(config, 'model_name', 'efficientnet_b0') # Default to efficientnet_b0
-    model = PandaSimpleModel(model_name=model_name_to_use, pretrained=True, num_classes=config.num_classes)
+    model_name_to_use = getattr(config, 'model_name', 'efficientnet_b0') 
+    model_output_dim = getattr(config, 'model_output_dim', 5) 
+    model = PandaSimpleModel(model_name=model_name_to_use, pretrained=True, num_classes_out=model_output_dim)
     model.to(device)
-    print(f"Using model: {model_name_to_use}")
+    print(f"Using model: {model_name_to_use} with output dimension: {model_output_dim}")
 
-
-    if hasattr(train_loader.dataset, 'df') and config.target_col in train_loader.dataset.df.columns:
-        labels_for_weights = train_loader.dataset.df[config.target_col].values
-        class_labels_unique = np.unique(labels_for_weights)
-
-        class_weights_array = compute_class_weight(
-            class_weight='balanced',
-            classes=class_labels_unique,
-            y=labels_for_weights
-        )
-        class_weights = torch.tensor(class_weights_array, dtype=torch.float).to(device)
-        print(f"Class weights: {class_weights.cpu().numpy()}")
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
-    else:
-        print("Warning: Could not access training labels to compute class weights. Using unweighted CrossEntropyLoss.")
-        criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss()
+    print(f"Using criterion: BCEWithLogitsLoss")
     
     # Optimizer Settings
     initial_lr = getattr(config, 'lr', 3e-5) 
@@ -221,9 +226,9 @@ def run_training(config, current_fold):
         print(f"Learning Rate Scheduler: Warmup ({warmup_epochs} epochs) + CosineAnnealingLR (T_max={cosine_t_max}, eta_min={getattr(config, 'eta_min', 1e-5):.1e})")
 
     best_kappa = -1.0
-    output_dir = f"./PANDA_models_fold{current_fold}"
+    output_dir = f"./PANDA_models_fold{current_fold}_model_{model_name_to_use}"
     os.makedirs(output_dir, exist_ok=True)
-    best_model_path = os.path.join(output_dir, f"best_model_seed{config.seed}.pth")
+    best_model_path = os.path.join(output_dir, f"best_model_{model_name_to_use}.pth")
 
     print(f"--- Starting training for Fold {current_fold} ---")
     print(f"Models will be saved to: {output_dir}")
@@ -282,30 +287,45 @@ def run_training(config, current_fold):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="PANDA Challenge Training Script")
+    parser = argparse.ArgumentParser(description="PANDA Challenge Training Script with Binned Labels")
     parser.add_argument('--fold', type=int, default=0, help='Fold number to train (0 to n_fold-1)')
-    parser.add_argument('--epochs', type=int, default=15, help='Total number of epochs to train')
+    parser.add_argument('--epochs', type=int, default=None, help='Total number of epochs to train (overrides CFG)')
     parser.add_argument('--batch_size', type=int, default=None, help='Batch size (overrides CFG)')
     parser.add_argument('--num_workers', type=int, default=None, help='Number of data loading workers (overrides CFG)')
-    parser.add_argument('--lr', type=float, default=3e-5, help='Initial learning rate') # Defaulting to 3e-5
-    parser.add_argument('--warmup_epochs', type=int, default=3, help='Number of warmup epochs') # Defaulting to 3
-    parser.add_argument('--model_name', type=str, default='efficientnet_b0', help='Name of the model backbone to use')
+    parser.add_argument('--lr', type=float, default=None, help='Initial learning rate (overrides CFG)')
+    parser.add_argument('--warmup_epochs', type=int, default=None, help='Number of warmup epochs (overrides CFG)')
+    parser.add_argument('--model_name', type=str, default=None, help='Name of the model backbone to use (overrides CFG)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode (uses a small subset of data)')
 
     args = parser.parse_args()
 
-    config = CFG() # Load defaults from dataloader.py
-    config.num_epochs = args.epochs
-    config.warmup_epochs = args.warmup_epochs # Add warmup_epochs to config
-    config.lr = args.lr # Add lr to config
-    config.model_name = args.model_name # Add model_name to config
+    config = CFG() # Load defaults from dataloader.py CFG
 
-    if args.batch_size is not None:
-        config.batch_size = args.batch_size
-    if args.num_workers is not None:
-        config.num_workers = args.num_workers
-    if args.debug:
-        config.debug = True
-        print("Debug mode enabled by command line argument.")
-    
+    # Override CFG with command-line arguments if provided
+    if args.epochs is not None: config.num_epochs = args.epochs
+    if args.batch_size is not None: config.batch_size = args.batch_size
+    if args.num_workers is not None: config.num_workers = args.num_workers
+    if args.lr is not None: config.lr = args.lr
+    if args.warmup_epochs is not None: config.warmup_epochs = args.warmup_epochs
+    if args.model_name is not None: config.model_name = args.model_name
+    if args.debug: config.debug = True # Enable debug mode if specified by CLI
+
+    config.num_epochs = getattr(config, 'num_epochs', 15) 
+    config.warmup_epochs = getattr(config, 'warmup_epochs', 3)
+    config.lr = getattr(config, 'lr', 3e-4) 
+    config.model_name = getattr(config, 'model_name', 'efficientnet_b0')
+    config.model_output_dim = getattr(config, 'model_output_dim', 5) 
+    config.seed = getattr(config, 'seed', 42)
+    config.weight_decay = getattr(config, 'weight_decay', 1e-5) 
+    config.eta_min = getattr(config, 'eta_min', 1e-6) 
+
+
+    print("Current Configuration:")
+    for key, value in config.__class__.__dict__.items():
+        if not key.startswith('__') and not callable(value): 
+            print(f"  CFG.{key}: {value}")
+    print("Effective runtime config (potentially overridden by CLI):") 
+    print(f"  epochs: {config.num_epochs}, batch_size: {config.batch_size}, lr: {config.lr}, model: {config.model_name}, fold: {args.fold}, debug: {config.debug}, model_output_dim: {config.model_output_dim}")
+
+
     run_training(config, args.fold)
