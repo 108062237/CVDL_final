@@ -18,6 +18,8 @@ from torchvision import transforms
 
 # --- Configuration ---
 class CFG:
+
+    model_pool_type = "avg" 
     # Basic settings
     competition_name = "PANDA"
     seed = 42
@@ -39,7 +41,7 @@ class CFG:
 
     # Classification task parameters
     num_classes = 6  # ISUP grade 0~5
-    model_output_dim = 5
+    model_output_dim = 10
 
     # Training parameters
     n_fold = 4
@@ -68,19 +70,42 @@ class PandaDataset(Dataset):
         self.target_col = target_col
         self.transform = transform
         self.model_output_dim = model_output_dim
+        self.num_isup_bins = 5 
+        self.num_gleason_bins = 5 
 
     def __len__(self):
         return len(self.df)
+    
+    def _parse_first_gleason(self, gleason_score_str):
+
+        if pd.isna(gleason_score_str) or gleason_score_str == "negative":
+            return 0 
+        if gleason_score_str == "0+0":
+             return 0
+        try:
+            parts = gleason_score_str.split('+')
+            if len(parts) == 2:
+                return int(parts[0])
+        except ValueError:
+            print(f"Warning: Could not parse gleason_score: {gleason_score_str}")
+            return 0 
+        return 0
 
     def __getitem__(self, index):
         row = self.df.iloc[index]
         image_id = row.image_id
         isup_grade = row[self.target_col]
+        gleason_score_str = row.get('gleason_score', '0+0')
 
         image_path = os.path.join(self.image_dir, f"{image_id}.png")
         
         try:
-            image = Image.open(image_path).convert('RGB') 
+            pil_image = Image.open(image_path).convert('RGB') 
+            numpy_image = np.array(pil_image)
+
+            inverted_numpy_image = 255 - numpy_image
+
+            image = Image.fromarray(inverted_numpy_image)
 
         except Exception as e:
             print(f"load {image_path} fail: {e}")
@@ -94,11 +119,21 @@ class PandaDataset(Dataset):
         if self.transform:
             image = self.transform(image) 
         
-        label_binned = np.zeros(self.model_output_dim, dtype=np.float32)
-        if isup_grade > 0:
-            label_binned[:isup_grade] = 1.0
+        label_combined = np.zeros(self.model_output_dim, dtype=np.float32)
+        if isup_grade > 0 and isup_grade <= self.num_isup_bins:
+            label_combined[:isup_grade] = 1.0
 
-        return image, torch.tensor(label_binned, dtype=torch.float32)
+        first_gleason = self._parse_first_gleason(gleason_score_str)
+
+        gleason_offset = self.num_isup_bins 
+        if first_gleason == 3:
+            label_combined[gleason_offset : gleason_offset+3] = 1.0
+        elif first_gleason == 4:
+            label_combined[gleason_offset : gleason_offset+4] = 1.0
+        elif first_gleason == 5:
+            label_combined[gleason_offset : gleason_offset+5] = 1.0
+
+        return image, torch.tensor(label_combined, dtype=torch.float32)
 
 # --- Data augmentation Transforms ---
 def get_transforms(mode="train", mean=CFG.mean, std=CFG.std):
@@ -109,7 +144,6 @@ def get_transforms(mode="train", mean=CFG.mean, std=CFG.std):
             transforms.RandomVerticalFlip(p=0.5),
             transforms.RandomRotation(degrees=15),
             transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
             transforms.ToTensor(), 
             transforms.Normalize(mean=mean, std=std)
         ])

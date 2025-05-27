@@ -190,11 +190,11 @@ if __name__ == "__main__":
     config.input_png_dir = "/home/gpl_homee/CVDL_Final/data/train_png" # 你的源PNG文件夾
 
     # 3. 設置拼接後圖塊PNG的輸出路徑 (建議用新名稱區分不同處理版本)
-    config.output_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_png_64x128_v2" # 示例：64個128x128圖塊，v2版本，來自cleaned_csv
+    config.output_dir = "/home/gpl_homee/CVDL_Final/data/train_concatenated_png_64x192_v2" # 示例：64個128x128圖塊，v2版本，來自cleaned_csv
 
     # 4. 設置圖塊參數
-    config.grid_side_count = 6  # 例如 8x8 = 64 個圖塊
-    config.tile_size = 256     # 每個圖塊的大小 128x128
+    config.grid_side_count = 8  # 例如 8x8 = 64 個圖塊
+    config.tile_size = 192     # 每個圖塊的大小 128x128
     # --- 結束用戶配置區 ---
 
     config.num_tiles_total = config.grid_side_count ** 2 # 自動計算總圖塊數

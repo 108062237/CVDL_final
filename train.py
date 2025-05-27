@@ -3,6 +3,8 @@ import time
 import argparse  # Used to pass arguments from the command line, such as fold number
 
 import torch
+
+torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm  # Note: using tqdm, not tqdm.notebook
@@ -11,17 +13,43 @@ import torchvision.models as models
 from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 
+
+import torch.nn.functional as F
+from torch.nn.parameter import Parameter
+
 # Import from our custom dataloader.py
 from dataloader import CFG, get_dataloaders_for_fold, set_seed
 
+def gem(x, p=3, eps=1e-6):
+    return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(1.0 / p)
+
+class GeM(nn.Module):
+    def __init__(self, p=3, eps=1e-6):
+        super(GeM, self).__init__()
+        self.p = Parameter(torch.ones(1) * p) # p 是一個可學習的參數
+        self.eps = eps
+
+    def forward(self, x):
+        return gem(x, p=self.p, eps=self.eps)
+
+    def __repr__(self):
+        return (
+            self.__class__.__name__
+            + f"(p={self.p.data.tolist()[0]:.4f}, eps={str(self.eps)})"
+        )
+    
 # --- Model definition ---
 class PandaSimpleModel(nn.Module):
-    def __init__(self, model_name='resnet34', pretrained=True, num_classes_out=None):
+    def __init__(self, model_name='resnet34', pretrained=True, num_classes_out=None, pool_type="avg", freeze_blocks=-1):
         super().__init__()
+
+        self.model_name = model_name 
+        self.pool_type = pool_type
+        self.freeze_blocks = freeze_blocks
         if num_classes_out is None:
             try:
                 default_out_dim = CFG.model_output_dim
-            except NameError: # 如果 CFG 未在全局定義
+            except NameError: 
                 print("Warning: CFG not globally defined for model_output_dim, defaulting to 5. Pass explicitly if needed.")
                 default_out_dim = 5
             current_num_classes = default_out_dim
@@ -44,12 +72,52 @@ class PandaSimpleModel(nn.Module):
             self.model.classifier[1] = nn.Linear(in_features, current_num_classes)
         elif model_name == 'efficientnet_b1':
             self.model = models.efficientnet_b1(pretrained=pretrained)
+
+            if self.pool_type == "gem":
+                print(f"Using GeM pooling for {self.model_name}")
+                self.model.avgpool = GeM() 
+            elif self.pool_type != "avg": 
+                print(f"Warning: Unknown pool_type '{self.pool_type}' for EfficientNet. Defaulting to AdaptiveAvgPool.")
+
             in_features = self.model.classifier[1].in_features
             self.model.classifier[1] = nn.Linear(in_features, current_num_classes)
+
+            if self.freeze_blocks >= 0: # 凍結 stem (features[0])
+                print(f"Freezing stem (features[0]) of {self.model_name}")
+                for param in self.model.features[0].parameters():
+                    param.requires_grad = False
+            if self.freeze_blocks >= 1: # 凍結 block 1 (features[1])
+                print(f"Freezing block 1 (features[1]) of {self.model_name}")
+                for param in self.model.features[1].parameters():
+                    param.requires_grad = False
+            if self.freeze_blocks >= 2: # 凍結 block 2 (features[2])
+                print(f"Freezing block 2 (features[2]) of {self.model_name}")
+                for param in self.model.features[2].parameters():
+                    param.requires_grad = False
+
         elif model_name == 'efficientnet_b2':
             self.model = models.efficientnet_b2(pretrained=pretrained)
+            if self.pool_type == "gem":
+                print(f"Using GeM pooling for {self.model_name}")
+                self.model.avgpool = GeM() 
+            elif self.pool_type != "avg": 
+                print(f"Warning: Unknown pool_type '{self.pool_type}' for EfficientNet. Defaulting to AdaptiveAvgPool.")
+
             in_features = self.model.classifier[1].in_features
             self.model.classifier[1] = nn.Linear(in_features, current_num_classes)
+
+            if self.freeze_blocks >= 0: # 凍結 stem (features[0])
+                print(f"Freezing stem (features[0]) of {self.model_name}")
+                for param in self.model.features[0].parameters():
+                    param.requires_grad = False
+            if self.freeze_blocks >= 1: # 凍結 block 1 (features[1])
+                print(f"Freezing block 1 (features[1]) of {self.model_name}")
+                for param in self.model.features[1].parameters():
+                    param.requires_grad = False
+            if self.freeze_blocks >= 2: # 凍結 block 2 (features[2])
+                print(f"Freezing block 2 (features[2]) of {self.model_name}")
+                for param in self.model.features[2].parameters():
+                    param.requires_grad = False
         elif model_name == 'efficientnet_b3':
             self.model = models.efficientnet_b3(pretrained=pretrained)
             in_features = self.model.classifier[1].in_features
@@ -104,27 +172,6 @@ class PandaSimpleModel(nn.Module):
             in_features = self.model.classifier.in_features
             self.model.classifier = nn.Linear(in_features, current_num_classes)
 
-        # --- Vision Transformer (ViT) - 需要 timm 庫或較新 torchvision ---
-        # 安裝: pip install timm
-        # elif model_name == 'vit_base_patch16_224': # 範例，輸入尺寸通常是 224x224
-        #     try:
-        #         import timm
-        #         self.model = timm.create_model('vit_base_patch16_224', pretrained=pretrained, num_classes=0) # num_classes=0 移除原始頭部
-        #         in_features = self.model.head.in_features # ViT 的頭部通常是 self.model.head
-        #         self.model.head = nn.Linear(in_features, current_num_classes) # 加上我們自己的頭部
-        #     except ImportError:
-        #         raise ImportError("請安裝 timm 庫以使用 Vision Transformer: pip install timm")
-        #     except Exception as e: # timm 模型結構可能變化
-        #         print(f"載入 timm 模型 {model_name} 出錯: {e}")
-        #         print("嘗試通用 ViT 頭部結構...")
-        #         # 通用 ViT 結構 (可能需要根據具體模型調整)
-        #         # 假設 self.model 已經載入且移除了原始頭部
-        #         # 這裡需要知道 ViT 在移除頭部後的輸出特徵維度
-        #         # 例如，對於 'vit_base_patch16_224'，通常是 768
-        #         # in_features = 768 # 根據所選 ViT 模型設定
-        #         # self.model.head = nn.Linear(in_features, current_num_classes) # 假設頭部名為 head
-        #         # pass # 您需要根據具體的 ViT 模型來確定如何獲取 in_features
-
         else:
             raise NotImplementedError(f"model {model_name} is not implement or incorrect name.")
 
@@ -155,30 +202,38 @@ def train_fn(train_loader, model, criterion, optimizer, device):
 def valid_fn(valid_loader, model, criterion, device):
     model.eval()
     running_loss = 0.0
-    all_preds_scalar = []  
-    all_labels_scalar = [] 
+    all_preds_isup_scalar = []
+    all_labels_isup_scalar = [] 
+
+    num_isup_outputs = 5
 
     progress_bar = tqdm(valid_loader, desc="Validation", leave=False)
     with torch.no_grad():
-        for images, labels_binned in progress_bar: 
+        for images, labels_combined in progress_bar: 
             images = images.to(device, dtype=torch.float)
-            labels_binned = labels_binned.to(device, dtype=torch.float) 
+            labels_combined = labels_combined.to(device, dtype=torch.float)
 
-            outputs = model(images) 
-            loss = criterion(outputs, labels_binned)
+            outputs_combined = model(images) 
+
+            loss = criterion(outputs_combined, labels_combined)
             running_loss += loss.item() * images.size(0)
 
-            preds_scalar = outputs.sigmoid().sum(dim=1).round().detach().cpu().numpy()
+            preds_isup_logits = outputs_combined[:, :num_isup_outputs]
+            preds_isup_scalar = preds_isup_logits.sigmoid().sum(dim=1).round().detach().cpu().numpy()
 
-            labels_scalar = labels_binned.sum(dim=1).detach().cpu().numpy()
+            labels_isup_binned = labels_combined[:, :num_isup_outputs]
+            labels_isup_scalar = labels_isup_binned.sum(dim=1).detach().cpu().numpy()
 
-            all_preds_scalar.extend(preds_scalar.astype(int)) 
-            all_labels_scalar.extend(labels_scalar.astype(int)) 
+            all_preds_isup_scalar.extend(preds_isup_scalar.astype(int))
+            all_labels_isup_scalar.extend(labels_isup_scalar.astype(int))
 
             progress_bar.set_postfix(loss=f"{loss.item():.4f}")
 
     epoch_loss = running_loss / len(valid_loader.dataset)
-    kappa = cohen_kappa_score(all_labels_scalar, all_preds_scalar, weights='quadratic')
+    kappa = cohen_kappa_score(all_labels_isup_scalar, all_preds_isup_scalar, weights='quadratic')
+
+
+
     return epoch_loss, kappa
 
 # --- Main execution function ---
@@ -195,9 +250,19 @@ def run_training(config, current_fold):
 
     print("Initializing model...")
     # Ensure config has model_name attribute or provide a default
-    model_name_to_use = getattr(config, 'model_name', 'efficientnet_b0') 
-    model_output_dim = getattr(config, 'model_output_dim', 5) 
-    model = PandaSimpleModel(model_name=model_name_to_use, pretrained=True, num_classes_out=model_output_dim)
+    model_name_to_use = getattr(config, 'model_name', 'efficientnet_b1') 
+    model_output_dim = getattr(config, 'model_output_dim', 10) 
+    model_pool_to_use = getattr(config, 'model_pool_type', 'gem')
+
+    num_blocks_to_freeze = 2
+
+    model = PandaSimpleModel(
+        model_name=model_name_to_use,
+        pretrained=True,
+        num_classes_out=model_output_dim,
+        pool_type=model_pool_to_use,
+        freeze_blocks=num_blocks_to_freeze 
+    )
     model.to(device)
     print(f"Using model: {model_name_to_use} with output dimension: {model_output_dim}")
 
@@ -207,8 +272,14 @@ def run_training(config, current_fold):
     # Optimizer Settings
     initial_lr = getattr(config, 'lr', 3e-5) 
     weight_decay_val = getattr(config, 'weight_decay', 1e-5)
-    optimizer = optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay_val)
+    optimizer = optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()), 
+        lr=initial_lr,
+        weight_decay=weight_decay_val
+    )
     print(f"Optimizer: AdamW, Initial LR: {initial_lr:.2e}, Weight Decay: {weight_decay_val:.1e}")
+    print(f"Number of trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+
     
     # Learning Rate Scheduler Settings
     num_epochs_total = getattr(config, 'num_epochs', 15) # Total epochs from config
@@ -310,11 +381,11 @@ if __name__ == '__main__':
     if args.model_name is not None: config.model_name = args.model_name
     if args.debug: config.debug = True # Enable debug mode if specified by CLI
 
-    config.num_epochs = getattr(config, 'num_epochs', 15) 
+    config.num_epochs = getattr(config, 'num_epochs', 30) 
     config.warmup_epochs = getattr(config, 'warmup_epochs', 3)
-    config.lr = getattr(config, 'lr', 3e-4) 
-    config.model_name = getattr(config, 'model_name', 'efficientnet_b0')
-    config.model_output_dim = getattr(config, 'model_output_dim', 5) 
+    config.lr = getattr(config, 'lr', 3e-5) 
+    config.model_name = getattr(config, 'model_name', 'efficientnet_b1')
+    config.model_output_dim = getattr(config, 'model_output_dim', 10) 
     config.seed = getattr(config, 'seed', 42)
     config.weight_decay = getattr(config, 'weight_decay', 1e-5) 
     config.eta_min = getattr(config, 'eta_min', 1e-6) 
