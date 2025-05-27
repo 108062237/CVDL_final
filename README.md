@@ -31,9 +31,9 @@ If you need to buid environment
 pip install -r requirements.txt
 ```
 
-## final Score
+## Final Score
 
-Our best scoreon kaggle is 0.93133
+Our best score on kaggle is 0.93133
 
-![alt text](image.png)
+![image](https://github.com/user-attachments/assets/fc0c7dda-a8ff-410d-bf66-41d83cb00fd2)
 
