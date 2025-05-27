@@ -22,8 +22,6 @@ Below is a description of the main files and directories in this project:
 
 ## Environment Requirements
 
-pip install -r requirements.txt
-
 
 If you need to buid environment
 
